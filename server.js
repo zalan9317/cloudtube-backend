@@ -10,20 +10,25 @@ app.use(express.json());
 
 const upload = multer({ dest: '/tmp/uploads/' });
 
-const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS);
-const auth = new google.auth.GoogleAuth({
-  credentials,
-  scopes: ['https://www.googleapis.com/auth/drive'],
+// OAuth2 hitelesítés a saját Google fiókoddal!
+const oauth2Client = new google.auth.OAuth2(
+  process.env.CLIENT_ID,
+  process.env.CLIENT_SECRET,
+  "https://developers.google.com/oauthplayground"
+);
+
+oauth2Client.setCredentials({
+  refresh_token: process.env.REFRESH_TOKEN
 });
-const drive = google.drive({ version: 'v3', auth });
+
+const drive = google.drive({ version: 'v3', auth: oauth2Client });
 const FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
 
-// Teszt végpont
 app.get('/', (req, res) => {
-  res.send('A CloudTube szerver sikeresen fut! 🚀');
+  res.send('A CloudTube szerver a te fiókoddal sikeresen fut! 🚀');
 });
 
-// 1. Feltöltés (SupportsAllDrives javítással)
+// 1. Feltöltés (Közvetlenül a te fiókodba és tárhelyedre)
 app.post('/api/upload', upload.single('media'), async (req, res) => {
   let tempFilePath = req.file ? req.file.path : null;
   try {
@@ -45,13 +50,12 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
       requestBody: fileMetadata,
       media: media,
       fields: 'id, name, mimeType',
-      supportsAllDrives: true,
     });
 
+    // Publikussá tesszük a megtekintéshez
     await drive.permissions.create({
       fileId: response.data.id,
       requestBody: { role: 'reader', type: 'anyone' },
-      supportsAllDrives: true,
     });
 
     if (tempFilePath && fs.existsSync(tempFilePath)) {
@@ -68,7 +72,7 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
   }
 });
 
-// 2. Fájlok és Like-ok lekérése
+// 2. Fájlok listázása
 app.get('/api/posts', async (req, res) => {
   try {
     const response = await drive.files.list({
@@ -76,8 +80,6 @@ app.get('/api/posts', async (req, res) => {
       fields: 'files(id, name, description, mimeType, createdTime, appProperties)',
       orderBy: 'createdTime desc',
       pageSize: 50,
-      supportsAllDrives: true,
-      includeItemsFromAllDrives: true,
     });
     
     const posts = response.data.files.map(file => ({
@@ -96,12 +98,7 @@ app.get('/api/posts', async (req, res) => {
 app.post('/api/like/:id', async (req, res) => {
   try {
     const fileId = req.params.id;
-    
-    const file = await drive.files.get({ 
-      fileId: fileId, 
-      fields: 'appProperties',
-      supportsAllDrives: true 
-    });
+    const file = await drive.files.get({ fileId: fileId, fields: 'appProperties' });
     
     let currentLikes = 0;
     if (file.data.appProperties && file.data.appProperties.likes) {
@@ -114,8 +111,7 @@ app.post('/api/like/:id', async (req, res) => {
       fileId: fileId,
       requestBody: {
         appProperties: { likes: newLikes.toString() }
-      },
-      supportsAllDrives: true,
+      }
     });
 
     res.json({ success: true, likes: newLikes });
