@@ -8,14 +8,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Átmeneti feltöltési mappa
 const upload = multer({ dest: '/tmp/uploads/' });
 
-// OAuth2 kliens konfiguráció fix redirect URI-val és szóköz-levágással
 const oauth2Client = new google.auth.OAuth2(
   (process.env.CLIENT_ID || '').trim(),
-  (process.env.CLIENT_SECRET || '').trim(),
-  "https://developers.google.com/oauthplayground"
+  (process.env.CLIENT_SECRET || '').trim()
 );
 
 oauth2Client.setCredentials({
@@ -25,18 +22,15 @@ oauth2Client.setCredentials({
 const drive = google.drive({ version: 'v3', auth: oauth2Client });
 const FOLDER_ID = (process.env.GOOGLE_DRIVE_FOLDER_ID || '').trim();
 
-// Teszt végpont
 app.get('/', (req, res) => {
-  res.send('A CloudTube backend szerver sikeresen fut! 🚀');
+  res.send('CloudTube szerver rendben fut.');
 });
 
-// 1. Média feltöltése
+// Feltöltés
 app.post('/api/upload', upload.single('media'), async (req, res) => {
   let tempFilePath = req.file ? req.file.path : null;
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'Nem érkezett fájl a kérésben!' });
-    }
+    if (!req.file) return res.status(400).json({ error: 'Nem érkezett fájl.' });
 
     const fileMetadata = {
       name: req.body.title || req.file.originalname,
@@ -64,24 +58,19 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
         supportsAllDrives: true,
       });
     } catch (permErr) {
-      console.warn('Jogosultság beállítási figyelmeztetés:', permErr.message);
+      console.warn('Jogosultság figyelmeztetés:', permErr.message);
     }
 
-    if (tempFilePath && fs.existsSync(tempFilePath)) {
-      fs.unlinkSync(tempFilePath);
-    }
-
+    if (tempFilePath && fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
     res.json({ success: true, file: response.data });
   } catch (error) {
-    console.error('Feltöltési hiba részletei:', error.response ? error.response.data : error);
-    if (tempFilePath && fs.existsSync(tempFilePath)) {
-      fs.unlinkSync(tempFilePath);
-    }
-    res.status(500).json({ error: 'Hiba történt a feltöltés során.' });
+    console.error('Feltöltési hiba:', error.response ? error.response.data : error);
+    if (tempFilePath && fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+    res.status(500).json({ error: 'Feltöltési hiba.' });
   }
 });
 
-// 2. Fájlok listázása
+// Listázás
 app.get('/api/posts', async (req, res) => {
   try {
     const response = await drive.files.list({
@@ -104,12 +93,12 @@ app.get('/api/posts', async (req, res) => {
 
     res.json({ posts });
   } catch (error) {
-    console.error('Listázási hiba részletei:', error.response ? error.response.data : error);
-    res.status(500).json({ error: 'Hiba a fájlok lekérésekor.' });
+    console.error('Listázási hiba:', error.response ? error.response.data : error);
+    res.status(500).json({ error: 'Lekérési hiba.' });
   }
 });
 
-// 3. Like mentése
+// Like
 app.post('/api/like/:id', async (req, res) => {
   try {
     const fileId = req.params.id;
@@ -119,41 +108,35 @@ app.post('/api/like/:id', async (req, res) => {
       supportsAllDrives: true,
     });
 
-    let currentLikes = 0;
-    if (file.data.appProperties && file.data.appProperties.likes) {
-      currentLikes = parseInt(file.data.appProperties.likes);
-    }
-
+    const currentLikes = (file.data.appProperties && file.data.appProperties.likes) 
+      ? parseInt(file.data.appProperties.likes) 
+      : 0;
     const newLikes = currentLikes + 1;
 
     await drive.files.update({
       fileId: fileId,
-      requestBody: {
-        appProperties: { likes: newLikes.toString() }
-      },
+      requestBody: { appProperties: { likes: newLikes.toString() } },
       supportsAllDrives: true,
     });
 
     res.json({ success: true, likes: newLikes });
   } catch (error) {
-    console.error('Hiba a like mentésekor:', error.response ? error.response.data : error);
-    res.status(500).json({ error: 'Nem sikerült rögzíteni a kedvelést.' });
+    console.error('Like hiba:', error.response ? error.response.data : error);
+    res.status(500).json({ error: 'Like hiba.' });
   }
 });
 
-// 4. Média streaming proxy
+// Közvetlen Média Stream
 app.get('/api/media/:id', async (req, res) => {
   try {
     const fileId = req.params.id;
     const meta = await drive.files.get({
       fileId: fileId,
-      fields: 'mimeType, size',
+      fields: 'mimeType',
       supportsAllDrives: true,
     });
 
-    if (meta.data.mimeType) {
-      res.setHeader('Content-Type', meta.data.mimeType);
-    }
+    if (meta.data.mimeType) res.setHeader('Content-Type', meta.data.mimeType);
 
     const stream = await drive.files.get(
       { fileId: fileId, alt: 'media', supportsAllDrives: true },
@@ -163,11 +146,9 @@ app.get('/api/media/:id', async (req, res) => {
     stream.data.pipe(res);
   } catch (error) {
     console.error('Stream hiba:', error);
-    res.status(500).send('Nem sikerült betölteni a médiafájlt.');
+    res.status(500).send('Stream hiba.');
   }
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`CloudTube szerver fut a ${PORT} porton.`);
-});
+app.listen(PORT, () => console.log(`Fut a porton: ${PORT}`));
