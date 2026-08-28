@@ -1,4 +1,29 @@
-// 1. Feltöltés végpont (Javított jogosultság- és stream kezeléssel)
+const express = require('express');
+const multer = require('multer');
+const { google } = require('googleapis');
+const cors = require('cors');
+const fs = require('fs');
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+const upload = multer({ dest: '/tmp/uploads/' });
+
+const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS);
+const auth = new google.auth.GoogleAuth({
+  credentials,
+  scopes: ['https://www.googleapis.com/auth/drive'],
+});
+const drive = google.drive({ version: 'v3', auth });
+const FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
+
+// Teszt végpont
+app.get('/', (req, res) => {
+  res.send('A CloudTube szerver sikeresen fut! 🚀');
+});
+
+// 1. Feltöltés (SupportsAllDrives javítással)
 app.post('/api/upload', upload.single('media'), async (req, res) => {
   let tempFilePath = req.file ? req.file.path : null;
   try {
@@ -16,7 +41,6 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
       body: fs.createReadStream(req.file.path),
     };
 
-    // supportsAllDrives: true és requestBody használata a hibák elkerülésére
     const response = await drive.files.create({
       requestBody: fileMetadata,
       media: media,
@@ -24,7 +48,6 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
       supportsAllDrives: true,
     });
 
-    // Publikussá tesszük a fájlt olvasásra
     await drive.permissions.create({
       fileId: response.data.id,
       requestBody: { role: 'reader', type: 'anyone' },
@@ -44,3 +67,63 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
     res.status(500).json({ error: 'Hiba a feltöltés során.' });
   }
 });
+
+// 2. Fájlok és Like-ok lekérése
+app.get('/api/posts', async (req, res) => {
+  try {
+    const response = await drive.files.list({
+      q: `'${FOLDER_ID}' in parents and trashed = false`,
+      fields: 'files(id, name, description, mimeType, createdTime, appProperties)',
+      orderBy: 'createdTime desc',
+      pageSize: 50,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+    
+    const posts = response.data.files.map(file => ({
+      ...file,
+      likes: (file.appProperties && file.appProperties.likes) ? parseInt(file.appProperties.likes) : 0
+    }));
+
+    res.json({ posts: posts });
+  } catch (error) {
+    console.error('Listázási hiba:', error);
+    res.status(500).json({ error: 'Hiba a fájlok lekérésekor.' });
+  }
+});
+
+// 3. Like mentése
+app.post('/api/like/:id', async (req, res) => {
+  try {
+    const fileId = req.params.id;
+    
+    const file = await drive.files.get({ 
+      fileId: fileId, 
+      fields: 'appProperties',
+      supportsAllDrives: true 
+    });
+    
+    let currentLikes = 0;
+    if (file.data.appProperties && file.data.appProperties.likes) {
+      currentLikes = parseInt(file.data.appProperties.likes);
+    }
+
+    const newLikes = currentLikes + 1;
+
+    await drive.files.update({
+      fileId: fileId,
+      requestBody: {
+        appProperties: { likes: newLikes.toString() }
+      },
+      supportsAllDrives: true,
+    });
+
+    res.json({ success: true, likes: newLikes });
+  } catch (error) {
+    console.error('Hiba a like mentésekor:', error);
+    res.status(500).json({ error: 'Nem sikerült a like mentése.' });
+  }
+});
+
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`Szerver fut a ${PORT} porton.`));
