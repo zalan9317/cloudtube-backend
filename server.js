@@ -10,6 +10,7 @@ app.use(express.json());
 
 const upload = multer({ dest: '/tmp/uploads/' });
 
+// OAuth2 kliens konfiguráció
 const oauth2Client = new google.auth.OAuth2(
   (process.env.CLIENT_ID || '').trim(),
   (process.env.CLIENT_SECRET || '').trim()
@@ -26,7 +27,7 @@ app.get('/', (req, res) => {
   res.send('CloudTube szerver rendben fut.');
 });
 
-// Feltöltés
+// 1. Feltöltés
 app.post('/api/upload', upload.single('media'), async (req, res) => {
   let tempFilePath = req.file ? req.file.path : null;
   try {
@@ -70,7 +71,7 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
   }
 });
 
-// Listázás
+// 2. Listázás
 app.get('/api/posts', async (req, res) => {
   try {
     const response = await drive.files.list({
@@ -98,7 +99,7 @@ app.get('/api/posts', async (req, res) => {
   }
 });
 
-// Like
+// 3. Like
 app.post('/api/like/:id', async (req, res) => {
   try {
     const fileId = req.params.id;
@@ -126,27 +127,62 @@ app.post('/api/like/:id', async (req, res) => {
   }
 });
 
-// Közvetlen Média Stream
+// 4. CHUNKING ÉS SEEKING TÁMOGATÁS (A tekerés javítása)
 app.get('/api/media/:id', async (req, res) => {
   try {
     const fileId = req.params.id;
+    
+    // Lekérjük a fájl metaadatait (főleg a mérete kell a tekeréshez)
     const meta = await drive.files.get({
       fileId: fileId,
-      fields: 'mimeType',
+      fields: 'mimeType, size',
       supportsAllDrives: true,
     });
 
-    if (meta.data.mimeType) res.setHeader('Content-Type', meta.data.mimeType);
+    const fileSize = parseInt(meta.data.size);
+    const mimeType = meta.data.mimeType;
+    const range = req.headers.range;
 
-    const stream = await drive.files.get(
-      { fileId: fileId, alt: 'media', supportsAllDrives: true },
-      { responseType: 'stream' }
-    );
+    // Ha a böngésző teker (tartományt kér)
+    if (range) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunksize = (end - start) + 1;
 
-    stream.data.pipe(res);
+      // 206 Partial Content fejléc küldése
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunksize,
+        'Content-Type': mimeType,
+      });
+
+      // Csak a kért részt töltjük le a Drive-ról
+      const stream = await drive.files.get(
+        { fileId: fileId, alt: 'media', supportsAllDrives: true },
+        { responseType: 'stream', headers: { Range: `bytes=${start}-${end}` } }
+      );
+
+      stream.data.pipe(res);
+    } else {
+      // Ha normál módon elindul a videó (elejétől)
+      res.writeHead(200, {
+        'Content-Length': fileSize,
+        'Content-Type': mimeType,
+        'Accept-Ranges': 'bytes', // Jelezzük a böngészőnek, hogy LEHET tekerni
+      });
+
+      const stream = await drive.files.get(
+        { fileId: fileId, alt: 'media', supportsAllDrives: true },
+        { responseType: 'stream' }
+      );
+
+      stream.data.pipe(res);
+    }
   } catch (error) {
-    console.error('Stream hiba:', error);
-    res.status(500).send('Stream hiba.');
+    console.error('Stream hiba:', error.message);
+    res.status(500).send('Nem sikerült betölteni a médiafájlt.');
   }
 });
 
