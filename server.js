@@ -8,13 +8,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Feltöltési ideiglenes mappa beállítása
+// Átmeneti feltöltési mappa
 const upload = multer({ dest: '/tmp/uploads/' });
 
-// OAuth2 kliens konfiguráció a felesleges whitespace hibák kiküszöbölésével
+// OAuth2 kliens konfiguráció fix redirect URI-val és szóköz-levágással
 const oauth2Client = new google.auth.OAuth2(
   (process.env.CLIENT_ID || '').trim(),
-  (process.env.CLIENT_SECRET || '').trim()
+  (process.env.CLIENT_SECRET || '').trim(),
+  "https://developers.google.com/oauthplayground"
 );
 
 oauth2Client.setCredentials({
@@ -29,7 +30,7 @@ app.get('/', (req, res) => {
   res.send('A CloudTube backend szerver sikeresen fut! 🚀');
 });
 
-// 1. Média feltöltése közvetlenül a Drive-ra
+// 1. Média feltöltése
 app.post('/api/upload', upload.single('media'), async (req, res) => {
   let tempFilePath = req.file ? req.file.path : null;
   try {
@@ -56,7 +57,6 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
       supportsAllDrives: true,
     });
 
-    // Publikus olvasási jog biztosítása a beágyazáshoz
     try {
       await drive.permissions.create({
         fileId: response.data.id,
@@ -67,7 +67,6 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
       console.warn('Jogosultság beállítási figyelmeztetés:', permErr.message);
     }
 
-    // Ideiglenes szerverfájl eltávolítása
     if (tempFilePath && fs.existsSync(tempFilePath)) {
       fs.unlinkSync(tempFilePath);
     }
@@ -82,7 +81,7 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
   }
 });
 
-// 2. Posztok és médiafájlok listázása
+// 2. Fájlok listázása
 app.get('/api/posts', async (req, res) => {
   try {
     const response = await drive.files.list({
@@ -110,7 +109,7 @@ app.get('/api/posts', async (req, res) => {
   }
 });
 
-// 3. Like rögzítése
+// 3. Like mentése
 app.post('/api/like/:id', async (req, res) => {
   try {
     const fileId = req.params.id;
@@ -142,7 +141,7 @@ app.post('/api/like/:id', async (req, res) => {
   }
 });
 
-// 4. Média streamelés és közvetlen megjelenítés
+// 4. Média streaming proxy
 app.get('/api/media/:id', async (req, res) => {
   try {
     const fileId = req.params.id;
