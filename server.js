@@ -8,34 +8,33 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Fájlfeltöltés átmeneti mappája
+// Feltöltési ideiglenes mappa beállítása
 const upload = multer({ dest: '/tmp/uploads/' });
 
-// OAuth2 kliens konfiguráció a saját fiókoddal
+// OAuth2 kliens konfiguráció a felesleges whitespace hibák kiküszöbölésével
 const oauth2Client = new google.auth.OAuth2(
-  process.env.CLIENT_ID,
-  process.env.CLIENT_SECRET,
-  "https://developers.google.com/oauthplayground"
+  (process.env.CLIENT_ID || '').trim(),
+  (process.env.CLIENT_SECRET || '').trim()
 );
 
 oauth2Client.setCredentials({
-  refresh_token: process.env.REFRESH_TOKEN
+  refresh_token: (process.env.REFRESH_TOKEN || '').trim()
 });
 
 const drive = google.drive({ version: 'v3', auth: oauth2Client });
-const FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID;
+const FOLDER_ID = (process.env.GOOGLE_DRIVE_FOLDER_ID || '').trim();
 
-// Alap ellenőrző végpont
+// Teszt végpont
 app.get('/', (req, res) => {
-  res.send('A CloudTube backend sikeresen és hibamentesen fut! 🚀');
+  res.send('A CloudTube backend szerver sikeresen fut! 🚀');
 });
 
-// 1. Feltöltés végpont
+// 1. Média feltöltése közvetlenül a Drive-ra
 app.post('/api/upload', upload.single('media'), async (req, res) => {
   let tempFilePath = req.file ? req.file.path : null;
   try {
     if (!req.file) {
-      return res.status(400).json({ error: 'Nem érkezett fájl a feltöltéshez!' });
+      return res.status(400).json({ error: 'Nem érkezett fájl a kérésben!' });
     }
 
     const fileMetadata = {
@@ -57,7 +56,7 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
       supportsAllDrives: true,
     });
 
-    // Fájl publikussá tétele olvasásra
+    // Publikus olvasási jog biztosítása a beágyazáshoz
     try {
       await drive.permissions.create({
         fileId: response.data.id,
@@ -68,6 +67,7 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
       console.warn('Jogosultság beállítási figyelmeztetés:', permErr.message);
     }
 
+    // Ideiglenes szerverfájl eltávolítása
     if (tempFilePath && fs.existsSync(tempFilePath)) {
       fs.unlinkSync(tempFilePath);
     }
@@ -82,7 +82,7 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
   }
 });
 
-// 2. Fájlok listázása
+// 2. Posztok és médiafájlok listázása
 app.get('/api/posts', async (req, res) => {
   try {
     const response = await drive.files.list({
@@ -106,11 +106,11 @@ app.get('/api/posts', async (req, res) => {
     res.json({ posts });
   } catch (error) {
     console.error('Listázási hiba részletei:', error.response ? error.response.data : error);
-    res.status(500).json({ error: 'Hiba a médiafájlok lekérésekor.' });
+    res.status(500).json({ error: 'Hiba a fájlok lekérésekor.' });
   }
 });
 
-// 3. Like mentése
+// 3. Like rögzítése
 app.post('/api/like/:id', async (req, res) => {
   try {
     const fileId = req.params.id;
@@ -142,7 +142,7 @@ app.post('/api/like/:id', async (req, res) => {
   }
 });
 
-// 4. Média streamelés / letöltés proxy (Megbízható közvetlen lejátszás)
+// 4. Média streamelés és közvetlen megjelenítés
 app.get('/api/media/:id', async (req, res) => {
   try {
     const fileId = req.params.id;
