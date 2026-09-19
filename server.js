@@ -71,7 +71,7 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
   }
 });
 
-// 2. Listázás (Pontos hibaátadással a konzolnak)
+// 2. Listázás
 app.get('/api/posts', async (req, res) => {
   try {
     const response = await drive.files.list({
@@ -103,7 +103,7 @@ app.get('/api/posts', async (req, res) => {
 // 3. Like
 app.post('/api/like/:id', async (req, res) => {
   try {
-    const fileId = req.params.id;
+    const fileId = req.params.id.replace(/\.mp4$/i, '');
     const file = await drive.files.get({
       fileId: fileId,
       fields: 'appProperties',
@@ -127,10 +127,12 @@ app.post('/api/like/:id', async (req, res) => {
   }
 });
 
-// 4. Média streamelés
+// 4. Média streamelés (Discord .mp4 + Range Seeking támogatás)
 app.get('/api/media/:id', async (req, res) => {
   try {
-    const fileId = req.params.id;
+    // Ha a Discord .mp4-gyel hívja meg, levágjuk:
+    const fileId = req.params.id.replace(/\.mp4$/i, '');
+
     const meta = await drive.files.get({
       fileId: fileId,
       fields: 'mimeType, size',
@@ -138,7 +140,7 @@ app.get('/api/media/:id', async (req, res) => {
     });
 
     const fileSize = parseInt(meta.data.size, 10);
-    const mimeType = meta.data.mimeType;
+    const mimeType = meta.data.mimeType || 'video/mp4';
     const range = req.headers.range;
 
     if (range && fileSize) {
