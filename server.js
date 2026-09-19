@@ -15,130 +15,69 @@ const oauth2Client = new google.auth.OAuth2(
   (process.env.CLIENT_SECRET || '').trim()
 );
 
-oauth2Client.setCredentials({
-  refresh_token: (process.env.REFRESH_TOKEN || '').trim()
-});
-
+oauth2Client.setCredentials({ refresh_token: (process.env.REFRESH_TOKEN || '').trim() });
 const drive = google.drive({ version: 'v3', auth: oauth2Client });
 const FOLDER_ID = (process.env.GOOGLE_DRIVE_FOLDER_ID || '').trim();
 
-app.get('/', (req, res) => {
-  res.send('CloudTube szerver rendben fut.');
-});
+app.get('/', (req, res) => res.send('CloudTube szerver rendben fut.'));
 
-// 1. Feltöltés
 app.post('/api/upload', upload.single('media'), async (req, res) => {
   let tempFilePath = req.file ? req.file.path : null;
   try {
     if (!req.file) return res.status(400).json({ error: 'Nem érkezett fájl.' });
-
-    const fileMetadata = {
-      name: req.body.title || req.file.originalname,
-      description: req.body.description || '',
-      parents: [FOLDER_ID],
-      appProperties: { likes: "0" }
-    };
-
-    const media = {
-      mimeType: req.file.mimetype,
-      body: fs.createReadStream(req.file.path),
-    };
-
-    const response = await drive.files.create({
-      requestBody: fileMetadata,
-      media: media,
-      fields: 'id, name, mimeType',
-      supportsAllDrives: true,
-    });
-
-    try {
-      await drive.permissions.create({
-        fileId: response.data.id,
-        requestBody: { role: 'reader', type: 'anyone' },
-        supportsAllDrives: true,
-      });
-    } catch (permErr) {
-      console.warn('Jogosultság figyelmeztetés:', permErr.message);
-    }
-
+    const fileMetadata = { name: req.body.title || req.file.originalname, description: req.body.description || '', parents: [FOLDER_ID], appProperties: { likes: "0" } };
+    const media = { mimeType: req.file.mimetype, body: fs.createReadStream(req.file.path) };
+    const response = await drive.files.create({ requestBody: fileMetadata, media: media, fields: 'id, name, mimeType', supportsAllDrives: true });
+    try { await drive.permissions.create({ fileId: response.data.id, requestBody: { role: 'reader', type: 'anyone' }, supportsAllDrives: true }); } catch (e) {}
     if (tempFilePath && fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
     res.json({ success: true, file: response.data });
   } catch (error) {
-    const errorDetails = error.response ? error.response.data : error.message;
-    console.error('Feltöltési hiba:', errorDetails);
     if (tempFilePath && fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
-    res.status(500).json({ error: 'Feltöltési hiba.', details: errorDetails });
+    res.status(500).json({ error: 'Feltöltési hiba.' });
   }
 });
 
-// 2. Listázás
 app.get('/api/posts', async (req, res) => {
   try {
-    const response = await drive.files.list({
-      q: `'${FOLDER_ID}' in parents and trashed = false`,
-      fields: 'files(id, name, description, mimeType, createdTime, appProperties)',
-      orderBy: 'createdTime desc',
-      pageSize: 100,
-      supportsAllDrives: true,
-      includeItemsFromAllDrives: true,
-    });
-
-    const posts = response.data.files.map(file => ({
-      id: file.id,
-      name: file.name,
-      description: file.description || '',
-      mimeType: file.mimeType,
-      createdTime: file.createdTime,
-      likes: (file.appProperties && file.appProperties.likes) ? parseInt(file.appProperties.likes) : 0
-    }));
-
+    const response = await drive.files.list({ q: `'${FOLDER_ID}' in parents and trashed = false`, fields: 'files(id, name, description, mimeType, createdTime, appProperties)', orderBy: 'createdTime desc', pageSize: 100, supportsAllDrives: true, includeItemsFromAllDrives: true });
+    const posts = response.data.files.map(file => ({ id: file.id, name: file.name, description: file.description || '', mimeType: file.mimeType, createdTime: file.createdTime, likes: (file.appProperties && file.appProperties.likes) ? parseInt(file.appProperties.likes) : 0 }));
     res.json({ posts });
-  } catch (error) {
-    const errorDetails = error.response ? error.response.data : error.message;
-    console.error('Listázási hiba:', errorDetails);
-    res.status(500).json({ error: 'Lekérési hiba.', details: errorDetails });
-  }
+  } catch (error) { res.status(500).json({ error: 'Lekérési hiba.' }); }
 });
 
-// 3. Like
 app.post('/api/like/:id', async (req, res) => {
   try {
     const fileId = req.params.id.replace(/\.mp4$/i, '');
-    const file = await drive.files.get({
-      fileId: fileId,
-      fields: 'appProperties',
-      supportsAllDrives: true,
-    });
-
-    const currentLikes = (file.data.appProperties && file.data.appProperties.likes) 
-      ? parseInt(file.data.appProperties.likes) 
-      : 0;
-    const newLikes = currentLikes + 1;
-
-    await drive.files.update({
-      fileId: fileId,
-      requestBody: { appProperties: { likes: newLikes.toString() } },
-      supportsAllDrives: true,
-    });
-
+    const file = await drive.files.get({ fileId: fileId, fields: 'appProperties', supportsAllDrives: true });
+    const newLikes = ((file.data.appProperties && file.data.appProperties.likes) ? parseInt(file.data.appProperties.likes) : 0) + 1;
+    await drive.files.update({ fileId: fileId, requestBody: { appProperties: { likes: newLikes.toString() } }, supportsAllDrives: true });
     res.json({ success: true, likes: newLikes });
+  } catch (error) { res.status(500).json({ error: 'Like hiba.' }); }
+});
+
+// ------------------------------------------------------------------
+// DISCORD EMBED JAVÍTÁS: Villámgyors válasz a Discord puhatolózó (HEAD) kérésére!
+// ------------------------------------------------------------------
+app.head('/api/media/:id', async (req, res) => {
+  try {
+    const fileId = req.params.id.replace(/\.mp4$/i, '');
+    const meta = await drive.files.get({ fileId: fileId, fields: 'mimeType, size', supportsAllDrives: true });
+    res.writeHead(200, {
+      'Content-Length': meta.data.size,
+      'Content-Type': 'video/mp4', // A Discord kifejezetten ezt az értéket szereti
+      'Accept-Ranges': 'bytes'
+    });
+    res.end();
   } catch (error) {
-    res.status(500).json({ error: 'Like hiba.', details: error.message });
+    res.status(500).end();
   }
 });
 
-// 4. Média streamelés (Discord .mp4 + Range Seeking támogatás)
+// 5. Média streamelés (Discord .mp4 + Range Seeking)
 app.get('/api/media/:id', async (req, res) => {
   try {
-    // Ha a Discord .mp4-gyel hívja meg, levágjuk:
     const fileId = req.params.id.replace(/\.mp4$/i, '');
-
-    const meta = await drive.files.get({
-      fileId: fileId,
-      fields: 'mimeType, size',
-      supportsAllDrives: true,
-    });
-
+    const meta = await drive.files.get({ fileId: fileId, fields: 'mimeType, size', supportsAllDrives: true });
     const fileSize = parseInt(meta.data.size, 10);
     const mimeType = meta.data.mimeType || 'video/mp4';
     const range = req.headers.range;
@@ -156,22 +95,11 @@ app.get('/api/media/:id', async (req, res) => {
         'Content-Type': mimeType,
       });
 
-      const stream = await drive.files.get(
-        { fileId: fileId, alt: 'media', supportsAllDrives: true },
-        { responseType: 'stream', headers: { Range: `bytes=${start}-${end}` } }
-      );
+      const stream = await drive.files.get({ fileId: fileId, alt: 'media', supportsAllDrives: true }, { responseType: 'stream', headers: { Range: `bytes=${start}-${end}` } });
       stream.data.pipe(res);
     } else {
-      res.writeHead(200, {
-        'Content-Length': fileSize,
-        'Content-Type': mimeType,
-        'Accept-Ranges': 'bytes',
-      });
-
-      const stream = await drive.files.get(
-        { fileId: fileId, alt: 'media', supportsAllDrives: true },
-        { responseType: 'stream' }
-      );
+      res.writeHead(200, { 'Content-Length': fileSize, 'Content-Type': mimeType, 'Accept-Ranges': 'bytes' });
+      const stream = await drive.files.get({ fileId: fileId, alt: 'media', supportsAllDrives: true }, { responseType: 'stream' });
       stream.data.pipe(res);
     }
   } catch (error) {
