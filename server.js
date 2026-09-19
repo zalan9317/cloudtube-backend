@@ -10,7 +10,6 @@ app.use(express.json());
 
 const upload = multer({ dest: '/tmp/uploads/' });
 
-// OAuth2 kliens konfiguráció
 const oauth2Client = new google.auth.OAuth2(
   (process.env.CLIENT_ID || '').trim(),
   (process.env.CLIENT_SECRET || '').trim()
@@ -65,13 +64,14 @@ app.post('/api/upload', upload.single('media'), async (req, res) => {
     if (tempFilePath && fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
     res.json({ success: true, file: response.data });
   } catch (error) {
-    console.error('Feltöltési hiba:', error.response ? error.response.data : error);
+    const errorDetails = error.response ? error.response.data : error.message;
+    console.error('Feltöltési hiba:', errorDetails);
     if (tempFilePath && fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
-    res.status(500).json({ error: 'Feltöltési hiba.' });
+    res.status(500).json({ error: 'Feltöltési hiba.', details: errorDetails });
   }
 });
 
-// 2. Listázás
+// 2. Listázás (Pontos hibaátadással a konzolnak)
 app.get('/api/posts', async (req, res) => {
   try {
     const response = await drive.files.list({
@@ -94,8 +94,9 @@ app.get('/api/posts', async (req, res) => {
 
     res.json({ posts });
   } catch (error) {
-    console.error('Listázási hiba:', error.response ? error.response.data : error);
-    res.status(500).json({ error: 'Lekérési hiba.' });
+    const errorDetails = error.response ? error.response.data : error.message;
+    console.error('Listázási hiba:', errorDetails);
+    res.status(500).json({ error: 'Lekérési hiba.', details: errorDetails });
   }
 });
 
@@ -122,35 +123,30 @@ app.post('/api/like/:id', async (req, res) => {
 
     res.json({ success: true, likes: newLikes });
   } catch (error) {
-    console.error('Like hiba:', error.response ? error.response.data : error);
-    res.status(500).json({ error: 'Like hiba.' });
+    res.status(500).json({ error: 'Like hiba.', details: error.message });
   }
 });
 
-// 4. CHUNKING ÉS SEEKING TÁMOGATÁS (A tekerés javítása)
+// 4. Média streamelés
 app.get('/api/media/:id', async (req, res) => {
   try {
     const fileId = req.params.id;
-    
-    // Lekérjük a fájl metaadatait (főleg a mérete kell a tekeréshez)
     const meta = await drive.files.get({
       fileId: fileId,
       fields: 'mimeType, size',
       supportsAllDrives: true,
     });
 
-    const fileSize = parseInt(meta.data.size);
+    const fileSize = parseInt(meta.data.size, 10);
     const mimeType = meta.data.mimeType;
     const range = req.headers.range;
 
-    // Ha a böngésző teker (tartományt kér)
-    if (range) {
+    if (range && fileSize) {
       const parts = range.replace(/bytes=/, "").split("-");
       const start = parseInt(parts[0], 10);
       const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
       const chunksize = (end - start) + 1;
 
-      // 206 Partial Content fejléc küldése
       res.writeHead(206, {
         'Content-Range': `bytes ${start}-${end}/${fileSize}`,
         'Accept-Ranges': 'bytes',
@@ -158,31 +154,27 @@ app.get('/api/media/:id', async (req, res) => {
         'Content-Type': mimeType,
       });
 
-      // Csak a kért részt töltjük le a Drive-ról
       const stream = await drive.files.get(
         { fileId: fileId, alt: 'media', supportsAllDrives: true },
         { responseType: 'stream', headers: { Range: `bytes=${start}-${end}` } }
       );
-
       stream.data.pipe(res);
     } else {
-      // Ha normál módon elindul a videó (elejétől)
       res.writeHead(200, {
         'Content-Length': fileSize,
         'Content-Type': mimeType,
-        'Accept-Ranges': 'bytes', // Jelezzük a böngészőnek, hogy LEHET tekerni
+        'Accept-Ranges': 'bytes',
       });
 
       const stream = await drive.files.get(
         { fileId: fileId, alt: 'media', supportsAllDrives: true },
         { responseType: 'stream' }
       );
-
       stream.data.pipe(res);
     }
   } catch (error) {
     console.error('Stream hiba:', error.message);
-    res.status(500).send('Nem sikerült betölteni a médiafájlt.');
+    res.status(500).send('Hiba a fájl betöltésekor.');
   }
 });
 
